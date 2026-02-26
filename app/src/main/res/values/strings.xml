@@ -1,0 +1,77 @@
+<resources>
+    <string name="app_name">Biscuit</string>
+    <string name="title_activity_bike">Biscuit</string>
+    <string name="title_home">主页</string>
+    <string name="title_track">轨迹</string>
+    <string name="title_sensors">传感器</string>
+    <string name="title_settings">设置</string>
+    <string name="settings_display_items">主页显示项</string>
+    <string name="settings_speed">速度</string>
+    <string name="settings_cadence">踏频</string>
+    <string name="settings_distance">距离</string>
+    <string name="settings_time">时间</string>
+    <string name="settings_moving_duration">运动持续时间</string>
+    <string name="settings_avg_speed">平均时速</string>
+    <string name="settings_update_interval">更新频率</string>
+    <string name="settings_theme">主题</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_theme_oled">OLED黑</string>
+
+    <!-- GPS Settings -->
+    <string name="settings_gps_params">GPS 定位参数</string>
+    <string name="settings_gps_interval">GPS 更新频率</string>
+    <string name="settings_gps_min_distance">最小位移距离</string>
+    <string name="settings_gps_accuracy_filter">定位精度筛选</string>
+    <string name="settings_gps_accuracy_threshold">精度阈值</string>
+    <string name="settings_gps_low_speed_filter">低速过滤</string>
+    <string name="settings_gps_low_speed_threshold">低速阈值 (km/h)</string>
+
+    <!-- Auto Pause -->
+    <string name="settings_auto_pause">自动暂停</string>
+    <string name="settings_auto_pause_speed">暂停速度阈值 (km/h)</string>
+    <string name="settings_auto_pause_delay">等待时间 (秒)</string>
+
+    <!-- History -->
+    <string name="title_history">历史</string>
+
+    <!-- Recording Controller -->
+    <string name="recording_start">开始录制</string>
+    <string name="recording_stop">停止录制</string>
+
+    <!-- Manual Pause -->
+    <string name="recording_pause">暂停</string>
+    <string name="recording_resume">继续</string>
+    <string name="status_manual_paused">⏸ 手动暂停</string>
+    <string name="status_auto_paused">⏸ 自动暂停</string>
+
+    <!-- Map Type -->
+    <string name="settings_map_type">地图类型</string>
+    <string name="settings_map_vector">矢量地图</string>
+    <string name="settings_map_satellite">卫星地图</string>
+    <string name="settings_map_terrain">等高线地形图（OpenTopoMap）</string>
+
+    <string name="settings_zoom_sensitivity">双击缩放灵敏度</string>
+    <string name="settings_tile_scale">地图瓦片缩放</string>
+
+    <!-- BiscuitService 通知 -->
+    <string name="notification_recording">正在记录骑行</string>
+    <string name="notification_auto_paused">已自动暂停记录</string>
+    <string name="notification_auto_resumed">已自动恢复记录</string>
+
+    <!-- HomeFragment 对话框 -->
+    <string name="dialog_stop_title">停止记录</string>
+    <string name="dialog_input_hint">输入骑行名称（可选）</string>
+    <string name="dialog_save">保存</string>
+    <string name="dialog_discard">放弃</string>
+    <string name="dialog_cancel">取消</string>
+
+    <!-- TrackFragment Toast -->
+    <string name="toast_gps_waiting">正在获取GPS定位，请稍候</string>
+    <string name="toast_auto_follow_on">自动跟踪已开启</string>
+    <string name="toast_auto_follow_off">自动跟踪已关闭</string>
+
+    <!-- HistoryDetailFragment -->
+    <string name="map_collapse">收起地图</string>
+    <string name="map_expand">展开地图</string>
+</resources>

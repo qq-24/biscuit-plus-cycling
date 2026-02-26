@@ -1,0 +1,112 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    // 使用 KSP 替代 kapt 进行注解处理
+    id 'com.google.devtools.ksp'
+    id 'org.jetbrains.kotlin.plugin.parcelize'
+}
+
+android {
+    def localProperties = new Properties()
+    def localPropertiesFile = rootProject.file('local.properties')
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.withReader('UTF-8') { reader ->
+            localProperties.load(reader)
+        }
+    }
+    def tiandituToken = localProperties.getProperty('TIANDITU_TOKEN', '')
+
+    namespace 'net.telent.biscuit'
+    compileSdk 35
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk 26
+        targetSdk 35
+        versionCode 3
+        versionName "1.2." + (new Date()).format('yyyyMMddHHmmss')
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField "String", "TIANDITU_TOKEN", "\"${tiandituToken}\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            buildConfigField "boolean", "ENABLE_MOCK_GPS", "false"
+        }
+        debug {
+            buildConfigField "boolean", "ENABLE_MOCK_GPS", "true"
+        }
+    }
+    flavorDimensions 'sensors'
+    productFlavors {
+        real {
+            applicationId "net.telent.biscuit"
+            dimension 'sensors'
+        }
+        fake {
+            applicationId "net.telent.biscuit.fake"
+            dimension 'sensors'
+        }
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+        unitTests.all {
+            useJUnitPlatform()
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
+    implementation 'androidx.media:media:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.navigation:navigation-fragment:2.8.4'
+    implementation 'androidx.navigation:navigation-ui:2.8.4'
+    implementation 'androidx.lifecycle:lifecycle-extensions:2.2.0'
+    implementation 'androidx.navigation:navigation-fragment-ktx:2.8.4'
+    implementation 'androidx.navigation:navigation-ui-ktx:2.8.4'
+    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter-engine:5.10.1'
+    testImplementation 'io.kotest:kotest-runner-junit5:5.8.0'
+    testImplementation 'io.kotest:kotest-assertions-core:5.8.0'
+    testImplementation 'io.kotest:kotest-property:5.8.0'
+    testImplementation 'org.robolectric:robolectric:4.11.1'
+    testImplementation 'io.mockk:mockk:1.13.8'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
+    implementation fileTree(dir: 'libs', include: ['*.aar', '*.jar'], exclude: [])
+    implementation files('libs/antpluginlib_3-8-0.aar')
+    implementation "androidx.core:core-ktx:1.15.0"
+    implementation "androidx.fragment:fragment-ktx:1.8.5"
+
+    implementation 'org.osmdroid:osmdroid-android:6.1.18'
+
+    def room_version = "2.6.1"
+
+    implementation "androidx.room:room-runtime:$room_version"
+    ksp "androidx.room:room-compiler:$room_version"
+
+    implementation "androidx.room:room-ktx:$room_version"
+
+    testImplementation "androidx.room:room-testing:$room_version"
+}

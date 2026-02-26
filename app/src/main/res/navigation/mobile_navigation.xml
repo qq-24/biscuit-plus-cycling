@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    app:startDestination="@+id/navigation_home">
+
+    <fragment
+        android:id="@+id/navigation_home"
+        android:name="net.telent.biscuit.ui.home.HomeFragment"
+        android:label="@string/title_home"
+        tools:layout="@layout/fragment_home" />
+
+    <fragment
+        android:id="@+id/navigation_track"
+        android:name="net.telent.biscuit.ui.track.TrackFragment"
+        android:label="@string/title_track"
+        tools:layout="@layout/fragment_track" />
+
+    <fragment
+        android:id="@+id/navigation_sensors"
+        android:name="net.telent.biscuit.ui.sensors.SensorsFragment"
+        android:label="@string/title_sensors"
+        tools:layout="@layout/fragment_sensors" />
+
+    <fragment
+        android:id="@+id/navigation_history"
+        android:name="net.telent.biscuit.ui.history.HistoryFragment"
+        android:label="@string/title_history"
+        tools:layout="@layout/fragment_history">
+        <action
+            android:id="@+id/action_history_to_detail"
+            app:destination="@id/navigation_history_detail" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_history_detail"
+        android:name="net.telent.biscuit.ui.history.HistoryDetailFragment"
+        android:label="@string/title_history">
+        <argument
+            android:name="session_start"
+            app:argType="long" />
+    </fragment>
+
+    <fragment
+        android:id="@+id/navigation_settings"
+        android:name="net.telent.biscuit.ui.settings.SettingsFragment"
+        android:label="@string/title_settings"
+        tools:layout="@layout/fragment_settings" />
+</navigation>
