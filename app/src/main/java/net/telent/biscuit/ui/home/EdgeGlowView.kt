@@ -137,7 +137,7 @@ class EdgeGlowView(context: Context, attrs: AttributeSet? = null) : View(context
         try {
             animator?.cancel()
             val effectiveCycle = if (durationMs > 0L) durationMs else cycleDurationMs
-            animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            animator = ValueAnimator.ofFloat(1f, 0f).apply {
                 duration = effectiveCycle / 2  // half-cycle for fade in/out
                 repeatMode = ValueAnimator.REVERSE
                 interpolator = LinearInterpolator()

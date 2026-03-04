@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import androidx.core.graphics.ColorUtils
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -14,6 +15,7 @@ import android.os.Vibrator
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -101,6 +103,10 @@ class HomeFragment : Fragment() {
     private var pauseProgressController: LongPressProgressController? = null
     private var pauseButtonContainer: FrameLayout? = null
     private var justCompletedPause = false
+
+    // 切歌按钮
+    private var btnMediaPrev: ImageButton? = null
+    private var btnMediaNext: ImageButton? = null
 
     /** Refresh display items when display_* or label size settings change. */
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -547,6 +553,12 @@ class HomeFragment : Fragment() {
         pauseButton = root.findViewById(R.id.btn_pause)
         recordingDurationText = root.findViewById(R.id.tv_recording_duration)
 
+        // 切歌按钮
+        btnMediaPrev = root.findViewById(R.id.btn_media_prev)
+        btnMediaNext = root.findViewById(R.id.btn_media_next)
+        btnMediaPrev?.setOnClickListener { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS) }
+        btnMediaNext?.setOnClickListener { dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT) }
+
         // Restore state from SharedPreferences
         isRecording = prefs.getBoolean("is_recording", false)
         recordingStartTime = prefs.getLong("recording_start_time", 0L)
@@ -695,6 +707,7 @@ class HomeFragment : Fragment() {
             .putLong("accumulated_duration_ms", 0L)
             .putLong("last_duration_tick_ms", 0L)
             .putBoolean("is_manual_paused", false)
+            .remove("ride_waypoints")
             .apply()
 
         // Start BiscuitService
@@ -739,6 +752,15 @@ class HomeFragment : Fragment() {
         model.setPaused(false)
         durationHandler.removeCallbacks(durationRunnable)
 
+        // 将临时 waypoints 复制到按 session 索引的持久键
+        val rideWaypoints = prefs.getString("ride_waypoints", null)
+        if (!rideWaypoints.isNullOrBlank()) {
+            prefs.edit()
+                .putString("waypoints_$recordingStartTime", rideWaypoints)
+                .remove("ride_waypoints")
+                .apply()
+        }
+
         prefs.edit()
             .putBoolean("is_recording", false)
             .putLong("recording_start_time", 0L)
@@ -778,11 +800,13 @@ class HomeFragment : Fragment() {
         model.setPaused(false)
         durationHandler.removeCallbacks(durationRunnable)
 
+        // 丢弃录制时清除临时 waypoints
         prefs.edit()
             .putBoolean("is_recording", false)
             .putLong("recording_start_time", 0L)
             .putLong("accumulated_duration_ms", 0L)
             .putLong("last_duration_tick_ms", 0L)
+            .remove("ride_waypoints")
             .apply()
 
         val stopIntent = Intent(requireContext(), BiscuitService::class.java)
@@ -816,6 +840,8 @@ class HomeFragment : Fragment() {
         if (isRecording) {
             recordingDurationText?.visibility = View.VISIBLE
             pauseButtonContainer?.visibility = View.VISIBLE
+            btnMediaPrev?.visibility = View.VISIBLE
+            btnMediaNext?.visibility = View.VISIBLE
             updatePauseButtonIcon()
 
             // Stop button only visible when paused
@@ -836,7 +862,16 @@ class HomeFragment : Fragment() {
             recordingDurationText?.visibility = View.GONE
             recordingDurationText?.text = ""
             pauseButtonContainer?.visibility = View.GONE
+            btnMediaPrev?.visibility = View.GONE
+            btnMediaNext?.visibility = View.GONE
         }
+    }
+
+    /** 通过 AudioManager 发送媒体按键事件 */
+    private fun dispatchMediaKey(keyCode: Int) {
+        val audioManager = requireContext().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        audioManager.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     private fun restoreRecordingState() {

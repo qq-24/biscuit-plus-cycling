@@ -2,6 +2,7 @@ package net.telent.biscuit
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.RingtoneManager
 import android.os.Build
@@ -203,6 +204,24 @@ class VibrationHelper(private val vibrator: Vibrator, private val context: Conte
 
     private fun playAlertSounds() {
         val ctx = context ?: return
+        val audioManager = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        // 使用 USAGE_NOTIFICATION_EVENT + AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+        // 让其他媒体应用降低音量而非静音
+        val audioAttrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+
+        var focusRequest: AudioFocusRequest? = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(audioAttrs)
+                .build()
+            // 即使请求失败也继续播放
+            audioManager.requestAudioFocus(focusRequest)
+        }
+
         for (i in 0 until ALERT_CYCLES) {
             val delay = i * (ALERT_VIBRATE_MS + ALERT_PAUSE_MS)
             alertHandler.postDelayed({
@@ -210,16 +229,23 @@ class VibrationHelper(private val vibrator: Vibrator, private val context: Conte
                     val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                     val ringtone = RingtoneManager.getRingtone(ctx, uri)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        ringtone?.audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
+                        ringtone?.audioAttributes = audioAttrs
                     }
                     ringtone?.play()
                 } catch (e: Exception) {
                     Log.w(TAG, "Alert sound not available", e)
                 }
             }, delay)
+        }
+
+        // 所有提示音播放完成后释放音频焦点
+        if (focusRequest != null) {
+            val fr = focusRequest
+            alertHandler.postDelayed({
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioManager.abandonAudioFocusRequest(fr)
+                }
+            }, ALERT_TOTAL_MS + 500L)
         }
     }
 }

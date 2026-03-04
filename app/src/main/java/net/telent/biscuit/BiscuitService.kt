@@ -88,6 +88,9 @@ class BiscuitService : Service() {
     private val lowSpeedAlertLogic = LowSpeedAlertLogic()
     @Volatile private var lowSpeedAlertActive = false
 
+    // 更新线程是否正在运行的标志（线程安全）
+    @Volatile private var updaterRunning = false
+
     // Whether the user has actively started a recording session
     @Volatile private var isRecording = false
 
@@ -170,7 +173,10 @@ class BiscuitService : Service() {
                     }
                 }
                 getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
-                    .edit().putBoolean("is_manual_paused", isManualPaused).apply()
+                    .edit()
+                    .putBoolean("is_manual_paused", isManualPaused)
+                    .putBoolean("is_auto_paused", isAutoPaused)
+                    .apply()
                 Log.d(TAG, "Pause toggle result: manualPaused=$isManualPaused, autoPaused=$isAutoPaused")
             }
             intent.hasExtra("refresh_sensors") -> {
@@ -179,6 +185,10 @@ class BiscuitService : Service() {
             }
             else -> {
                 Log.d(TAG, "startForeground requested")
+                // 冷启动修复：确保录制资源已初始化
+                // 当 onCreate() 因 SharedPreferences.apply() 异步延迟而未能初始化时，
+                // 此处作为兜底确保录制正常启动
+                ensureRecordingResources()
             }
         }
         return START_STICKY
@@ -193,7 +203,13 @@ class BiscuitService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private val updaterThread = object: Thread() {
+    private var updaterThread: Thread? = null
+
+    /**
+     * 创建更新线程的工厂方法。
+     * 每次需要启动线程时调用此方法创建新实例（Thread 不能重复 start）。
+     */
+    private fun createUpdaterThread(): Thread = object: Thread() {
         var lastSensorUpdateTime = Instant.EPOCH
         var lastBroadcastTime = Instant.EPOCH
         var amRunning = true
@@ -201,161 +217,215 @@ class BiscuitService : Service() {
             amRunning = false
         }
         override fun run() {
-            var previousLatitude : Double? = null
-            var previousLongitude : Double? = null
+            updaterRunning = true
+            try {
+                var previousLatitude : Double? = null
+                var previousLongitude : Double? = null
 
-            if (isRecording) {
-                db.sessionDao().start(Instant.now())
-            }
-            while (amRunning) {
-                val latest = sensors.timestamp()
-                val now = Instant.now()
-                val prefs = getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
-                val updateInterval = prefs.getInt("update_interval", 1000)
-                val safeUpdateInterval = if (updateInterval > 0) updateInterval else 1000
-                val sensorUpdated = latest > lastSensorUpdateTime
-                var shouldPersist = false
-
-                // Read auto-pause settings
-                val autoPauseEnabled = prefs.getBoolean("auto_pause_enabled", false)
-                val autoPauseSpeed = prefs.getFloat("auto_pause_speed", 3f).toDouble()
-                val autoPauseDelay = prefs.getInt("auto_pause_delay", 10) // seconds
-
-                // Sync recording state from prefs (set by HomeFragment)
-                isRecording = prefs.getBoolean("is_recording", false)
-
-                // Determine current speed
-                val useGpsSpeed = sensors.speed.state != ISensor.SensorState.PRESENT
-                val currentSpeed = if (useGpsSpeed) sensors.position.speed else sensors.speed.speed
-
-                // Auto-pause logic — runs EVERY tick, outside sensorUpdated
-                // Sync state to AutoPauseLogic before processing
-                autoPauseLogic.isAutoPaused = isAutoPaused
-                autoPauseLogic.isManualPaused = isManualPaused
-                autoPauseLogic.lowSpeedStartTime = lowSpeedStartTime
-                autoPauseLogic.resumeCooldownUntil = resumeCooldownUntil
-
-                if (!isRecording) {
-                    // Not recording: ensure all pause state is clean
-                    isAutoPaused = false
-                    lowSpeedStartTime = null
-                    autoPauseLogic.isAutoPaused = false
-                    autoPauseLogic.lowSpeedStartTime = null
-                } else {
-                    val result = autoPauseLogic.processTickFull(
-                        autoPauseEnabled = autoPauseEnabled,
-                        currentSpeed = currentSpeed,
-                        autoPauseSpeed = autoPauseSpeed,
-                        autoPauseDelay = autoPauseDelay,
-                        now = now
-                    )
-
-                    // Sync state back from AutoPauseLogic
-                    val prevAutoPaused = isAutoPaused
-                    val prevManualPaused = isManualPaused
-                    isAutoPaused = autoPauseLogic.isAutoPaused
-                    isManualPaused = autoPauseLogic.isManualPaused
-                    lowSpeedStartTime = autoPauseLogic.lowSpeedStartTime
-                    resumeCooldownUntil = autoPauseLogic.resumeCooldownUntil
-
-                    // Side effects: vibration and notifications on state changes
-                    if (result.autoPauseChanged) {
-                        triggerStrongVibration()
-                        if (isAutoPaused) {
-                            showAutoPauseNotification(paused = true)
-                            Log.d(TAG, "Auto-paused: speed=$currentSpeed < threshold=$autoPauseSpeed")
-                        } else {
-                            showAutoPauseNotification(paused = false)
-                            Log.d(TAG, "Auto-resumed: speed=$currentSpeed >= threshold=$autoPauseSpeed")
-                        }
-                    }
-                    if (result.manualPauseChanged && !isManualPaused) {
-                        triggerStrongVibration()
-                        showAutoPauseNotification(paused = false)
-                        Log.d(TAG, "Auto-resumed from manual pause: speed=$currentSpeed >= threshold=$autoPauseSpeed")
-                    }
+                if (isRecording) {
+                    db.sessionDao().start(Instant.now())
                 }
+                while (amRunning) {
+                    val latest = sensors.timestamp()
+                    val now = Instant.now()
+                    val prefs = getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
+                    val updateInterval = prefs.getInt("update_interval", 1000)
+                    val safeUpdateInterval = if (updateInterval > 0) updateInterval else 1000
+                    val sensorUpdated = latest > lastSensorUpdateTime
+                    var shouldPersist = false
 
-                // Effective pause state: manual OR auto
-                val isPaused = isManualPaused || isAutoPaused
+                    // Read auto-pause settings
+                    val autoPauseEnabled = prefs.getBoolean("auto_pause_enabled", false)
+                    val autoPauseSpeed = prefs.getFloat("auto_pause_speed", 3f).toDouble()
+                    val autoPauseDelay = prefs.getInt("auto_pause_delay", 10) // seconds
 
-                // Low-speed alert logic — runs every tick, after auto-pause
-                val lowSpeedAlertEnabled = prefs.getBoolean("low_speed_alert_enabled", false)
-                val lowSpeedAlertThreshold = prefs.getFloat("low_speed_alert_threshold", 10.0f).toDouble()
-                val lowSpeedAlertResult = lowSpeedAlertLogic.processTick(
-                    lowSpeedAlertEnabled = lowSpeedAlertEnabled,
-                    autoPauseEnabled = autoPauseEnabled,
-                    currentSpeed = currentSpeed,
-                    lowSpeedThreshold = lowSpeedAlertThreshold,
-                    autoPauseSpeed = autoPauseSpeed,
-                    isPaused = isPaused,
-                    isRecording = isRecording,
-                    now = now
-                )
-                lowSpeedAlertActive = lowSpeedAlertResult.shouldAlert
+                    // Sync recording state from prefs (set by HomeFragment)
+                    isRecording = prefs.getBoolean("is_recording", false)
 
-                // Track recording elapsed time (wall-clock, excluding paused)
-                if (lastElapsedTickMs > 0 && !isPaused) {
-                    recordingElapsedMs += System.currentTimeMillis() - lastElapsedTickMs
-                }
-                lastElapsedTickMs = System.currentTimeMillis()
-                // Persist for UI to read on resume
-                prefs.edit()
-                    .putLong("accumulated_duration_ms", recordingElapsedMs)
-                    .putLong("last_duration_tick_ms", lastElapsedTickMs)
-                    .apply()
+                    // Determine current speed
+                    val useGpsSpeed = sensors.speed.state != ISensor.SensorState.PRESENT
+                    val currentSpeed = if (useGpsSpeed) sensors.position.speed else sensors.speed.speed
 
-                if (sensorUpdated) {
-                    // Pause-aware distance tracking (Requirement 5)
-                    val rawDistance = if (useGpsSpeed) sensors.position.distance else sensors.speed.distance
-                    if (isPaused) {
-                        // Paused: record current raw distance snapshot, don't accumulate
-                        lastDistanceSnapshot = rawDistance
+                    // Auto-pause logic — runs EVERY tick, outside sensorUpdated
+                    // Sync state to AutoPauseLogic before processing
+                    autoPauseLogic.isAutoPaused = isAutoPaused
+                    autoPauseLogic.isManualPaused = isManualPaused
+                    autoPauseLogic.lowSpeedStartTime = lowSpeedStartTime
+                    autoPauseLogic.resumeCooldownUntil = resumeCooldownUntil
+
+                    if (!isRecording) {
+                        // Not recording: ensure all pause state is clean
+                        isAutoPaused = false
+                        lowSpeedStartTime = null
+                        autoPauseLogic.isAutoPaused = false
+                        autoPauseLogic.lowSpeedStartTime = null
                     } else {
-                        if (wasPausedLastTick) {
-                            // Just resumed from pause: reset snapshot, discard pause-period delta
-                            lastDistanceSnapshot = rawDistance
-                        } else {
-                            // Normal running: accumulate delta
-                            val delta = rawDistance - lastDistanceSnapshot
-                            if (delta > 0) {
-                                pauseAwareDistance += delta
-                                lastDistanceSnapshot = rawDistance
+                        val result = autoPauseLogic.processTickFull(
+                            autoPauseEnabled = autoPauseEnabled,
+                            currentSpeed = currentSpeed,
+                            autoPauseSpeed = autoPauseSpeed,
+                            autoPauseDelay = autoPauseDelay,
+                            now = now
+                        )
+
+                        // Sync state back from AutoPauseLogic
+                        val prevAutoPaused = isAutoPaused
+                        val prevManualPaused = isManualPaused
+                        isAutoPaused = autoPauseLogic.isAutoPaused
+                        isManualPaused = autoPauseLogic.isManualPaused
+                        lowSpeedStartTime = autoPauseLogic.lowSpeedStartTime
+                        resumeCooldownUntil = autoPauseLogic.resumeCooldownUntil
+
+                        // Side effects: vibration and notifications on state changes
+                        if (result.autoPauseChanged) {
+                            triggerStrongVibration()
+                            // 持久化自动暂停状态，杀掉 app 重启后可恢复
+                            prefs.edit().putBoolean("is_auto_paused", isAutoPaused).apply()
+                            if (isAutoPaused) {
+                                showAutoPauseNotification(paused = true)
+                                Log.d(TAG, "Auto-paused: speed=$currentSpeed < threshold=$autoPauseSpeed")
+                            } else {
+                                showAutoPauseNotification(paused = false)
+                                Log.d(TAG, "Auto-resumed: speed=$currentSpeed >= threshold=$autoPauseSpeed")
                             }
                         }
+                        if (result.manualPauseChanged && !isManualPaused) {
+                            triggerStrongVibration()
+                            showAutoPauseNotification(paused = false)
+                            Log.d(TAG, "Auto-resumed from manual pause: speed=$currentSpeed >= threshold=$autoPauseSpeed")
+                        }
                     }
-                    wasPausedLastTick = isPaused
 
-                    // Only accumulate moving time if not paused
-                    if (!isPaused && currentSpeed > 1.0 && lastSensorUpdateTime > Instant.EPOCH) {
-                        val elapsed = Duration.between(lastSensorUpdateTime, latest)
-                        movingTime = movingTime.plus(elapsed)
+                    // Effective pause state: manual OR auto
+                    val isPaused = isManualPaused || isAutoPaused
+
+                    // Low-speed alert logic — runs every tick, after auto-pause
+                    val lowSpeedAlertEnabled = prefs.getBoolean("low_speed_alert_enabled", false)
+                    val lowSpeedAlertThreshold = prefs.getFloat("low_speed_alert_threshold", 10.0f).toDouble()
+                    val lowSpeedAlertResult = lowSpeedAlertLogic.processTick(
+                        lowSpeedAlertEnabled = lowSpeedAlertEnabled,
+                        autoPauseEnabled = autoPauseEnabled,
+                        currentSpeed = currentSpeed,
+                        lowSpeedThreshold = lowSpeedAlertThreshold,
+                        autoPauseSpeed = autoPauseSpeed,
+                        isPaused = isPaused,
+                        isRecording = isRecording,
+                        now = now
+                    )
+                    lowSpeedAlertActive = lowSpeedAlertResult.shouldAlert
+
+                    // Track recording elapsed time (wall-clock, excluding paused)
+                    if (lastElapsedTickMs > 0 && !isPaused) {
+                        recordingElapsedMs += System.currentTimeMillis() - lastElapsedTickMs
                     }
-                    val latChanged = sensors.position.latitude != previousLatitude
-                    val lngChanged = sensors.position.longitude != previousLongitude
-                    // Only persist if not paused AND there's actual movement
-                    // Use low speed filter from settings if enabled, otherwise persist when speed > 0
-                    val lowSpeedFilterEnabled = prefs.getBoolean("gps_low_speed_filter", true)
-                    val lowSpeedThreshold = if (lowSpeedFilterEnabled) prefs.getFloat("gps_low_speed_threshold", 3f).toDouble() else 0.0
-                    shouldPersist = isRecording && !isPaused && currentSpeed > lowSpeedThreshold
-                    lastSensorUpdateTime = latest
-                    previousLatitude = sensors.position.latitude
-                    previousLongitude = sensors.position.longitude
+                    lastElapsedTickMs = System.currentTimeMillis()
+                    // Persist for UI to read on resume
+                    prefs.edit()
+                        .putLong("accumulated_duration_ms", recordingElapsedMs)
+                        .putLong("last_duration_tick_ms", lastElapsedTickMs)
+                        .apply()
+
+                    if (sensorUpdated) {
+                        // Pause-aware distance tracking (Requirement 5)
+                        val rawDistance = if (useGpsSpeed) sensors.position.distance else sensors.speed.distance
+                        if (isPaused) {
+                            // Paused: record current raw distance snapshot, don't accumulate
+                            lastDistanceSnapshot = rawDistance
+                        } else {
+                            if (wasPausedLastTick) {
+                                // Just resumed from pause: reset snapshot, discard pause-period delta
+                                lastDistanceSnapshot = rawDistance
+                            } else {
+                                // Normal running: accumulate delta
+                                val delta = rawDistance - lastDistanceSnapshot
+                                if (delta > 0) {
+                                    pauseAwareDistance += delta
+                                    lastDistanceSnapshot = rawDistance
+                                }
+                            }
+                        }
+                        wasPausedLastTick = isPaused
+
+                        // Only accumulate moving time if not paused
+                        if (!isPaused && currentSpeed > 1.0 && lastSensorUpdateTime > Instant.EPOCH) {
+                            val elapsed = Duration.between(lastSensorUpdateTime, latest)
+                            movingTime = movingTime.plus(elapsed)
+                        }
+                        val latChanged = sensors.position.latitude != previousLatitude
+                        val lngChanged = sensors.position.longitude != previousLongitude
+                        // Only persist if not paused AND there's actual movement
+                        // Use low speed filter from settings if enabled, otherwise persist when speed > 0
+                        val lowSpeedFilterEnabled = prefs.getBoolean("gps_low_speed_filter", true)
+                        val lowSpeedThreshold = if (lowSpeedFilterEnabled) prefs.getFloat("gps_low_speed_threshold", 3f).toDouble() else 0.0
+                        shouldPersist = isRecording && !isPaused && currentSpeed > lowSpeedThreshold
+                        lastSensorUpdateTime = latest
+                        previousLatitude = sensors.position.latitude
+                        previousLongitude = sensors.position.longitude
+                    }
+
+                    val shouldBroadcast = sensorUpdated ||
+                        lastBroadcastTime == Instant.EPOCH ||
+                        Duration.between(lastBroadcastTime, now).toMillis() >= safeUpdateInterval
+
+                    if (shouldBroadcast) {
+                        Log.d(TAG, "update tick sensorUpdated=$sensorUpdated persist=$shouldPersist intervalMs=$safeUpdateInterval latest=$latest autoPaused=$isAutoPaused")
+                        logUpdate(now, shouldPersist)
+                        lastBroadcastTime = now
+                    }
+
+                    sleep(safeUpdateInterval.toLong())
                 }
-
-                val shouldBroadcast = sensorUpdated ||
-                    lastBroadcastTime == Instant.EPOCH ||
-                    Duration.between(lastBroadcastTime, now).toMillis() >= safeUpdateInterval
-
-                if (shouldBroadcast) {
-                    Log.d(TAG, "update tick sensorUpdated=$sensorUpdated persist=$shouldPersist intervalMs=$safeUpdateInterval latest=$latest autoPaused=$isAutoPaused")
-                    logUpdate(now, shouldPersist)
-                    lastBroadcastTime = now
-                }
-
-                sleep(safeUpdateInterval.toLong())
+            } finally {
+                updaterRunning = false
             }
         }
+    }
+
+    /**
+     * 启动更新线程：检查是否已在运行，若未运行则创建并启动新线程。
+     */
+    private fun startUpdaterThread() {
+        if (updaterRunning) return
+        updaterThread = createUpdaterThread()
+        updaterThread?.start()
+    }
+
+    /**
+     * 确保录制所需的资源已初始化。
+     * 如果更新线程已在运行则直接返回（幂等）。
+     * 从 SharedPreferences 读取 isRecording，若未在录制则直接返回。
+     * 否则获取 WakeLock、检查权限、启动传感器搜索、启动更新线程。
+     */
+    private fun ensureRecordingResources() {
+        if (updaterRunning) return  // 已在运行，不重复初始化
+
+        val prefs = getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
+        isRecording = prefs.getBoolean("is_recording", false)
+        if (!isRecording) return
+
+        // 获取 WakeLock
+        if (wakeLock == null || wakeLock?.isHeld != true) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "biscuit:recording").apply {
+                acquire(12 * 60 * 60 * 1000L)
+            }
+        }
+        Log.d(TAG, "WakeLock acquired")
+
+        // 检查位置权限
+        Log.d(TAG, "Location permission check fine=${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)}")
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            sensors.position.state = ISensor.SensorState.FORBIDDEN
+        }
+
+        // 启动传感器搜索
+        Log.d(TAG, "startSearch sensors")
+        sensors.startSearch(this)
+
+        // 启动更新线程
+        Log.d(TAG, "startUpdaterThread")
+        startUpdaterThread()
     }
 
     override fun onCreate() {
@@ -365,34 +435,15 @@ class BiscuitService : Service() {
         // Restore states from prefs FIRST to gate resource acquisition
         val prefs = getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
         isManualPaused = prefs.getBoolean("is_manual_paused", false)
+        isAutoPaused = prefs.getBoolean("is_auto_paused", false)
         isRecording = prefs.getBoolean("is_recording", false)
         recordingElapsedMs = prefs.getLong("accumulated_duration_ms", 0L)
         lastElapsedTickMs = 0L  // Will be set on first tick
         Log.d(TAG, "Restored isRecording=$isRecording recordingElapsedMs=$recordingElapsedMs")
 
-        if (isRecording) {
-            // Only acquire resources when actively recording
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "biscuit:recording").apply {
-                acquire(12 * 60 * 60 * 1000L)
-            }
-            Log.d(TAG, "WakeLock acquired")
-
-            Log.d(TAG, "Location permission check fine=${ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)}")
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Not recording track, no Location permission",
-                        Toast.LENGTH_SHORT).show()
-                sensors.position.state = ISensor.SensorState.FORBIDDEN
-            }
-
-            Log.d(TAG, "startSearch sensors")
-            sensors.startSearch(this)
-
-            Log.d(TAG, "updaterThread start")
-            updaterThread.start()
-        } else {
-            Log.d(TAG, "Not recording, skipping resource acquisition")
-        }
+        // 使用 ensureRecordingResources() 统一处理录制资源初始化
+        // 该方法内部会重新从 prefs 读取 isRecording 并判断是否需要初始化
+        ensureRecordingResources()
     }
 
     override fun onTaskRemoved(rootIntent: Intent) {
@@ -404,9 +455,12 @@ class BiscuitService : Service() {
     private fun shutdown() {
         Log.d(TAG, "shutdown begin")
         isRecording = false
-        // Clear manual pause state on stop
+        // Clear manual pause and auto-pause state on stop
         getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
-            .edit().putBoolean("is_manual_paused", false).apply()
+            .edit()
+            .putBoolean("is_manual_paused", false)
+            .putBoolean("is_auto_paused", false)
+            .apply()
         // Clear auto-pause notification
         clearAutoPauseNotification()
         // Release wake lock
@@ -414,7 +468,9 @@ class BiscuitService : Service() {
         stopForeground(true)
         stopSelf()
         sensors.close()
-        updaterThread.shutdown()
+        updaterThread?.interrupt()
+        updaterThread = null
+        updaterRunning = false
         Log.d(TAG, "shutdown complete")
     }
 
@@ -423,7 +479,9 @@ class BiscuitService : Service() {
         super.onDestroy()
         try { wakeLock?.release(); wakeLock = null } catch (_: Exception) {}
         sensors.close()
-        updaterThread.shutdown()
+        updaterThread?.interrupt()
+        updaterThread = null
+        updaterRunning = false
     }
 
     private fun logUpdate(timestamp: Instant, persist: Boolean) {

@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Paint
 import android.location.Location
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -27,6 +28,7 @@ import net.telent.biscuit.DistanceFormatter
 import net.telent.biscuit.DoubleTapDragZoomOverlay
 import net.telent.biscuit.R
 import net.telent.biscuit.TianDiTuTileSource
+import net.telent.biscuit.Waypoint
 import org.osmdroid.tileprovider.MapTileProviderBasic
 
 import org.osmdroid.util.GeoPoint
@@ -64,6 +66,11 @@ class TrackFragment : Fragment() {
     private var mapDash1: TextView? = null
     private var mapDash2: TextView? = null
     private var mapDash3: TextView? = null
+
+    // 路径标记点
+    private val waypoints = mutableListOf<Waypoint>()
+    private val waypointOverlays = mutableListOf<org.osmdroid.views.overlay.Overlay>()
+    private var btnMarkWaypoint: ImageButton? = null
 
     private val gpsListener = object : LocationListener {
         override fun onLocationChanged(loc: Location) {
@@ -176,6 +183,10 @@ class TrackFragment : Fragment() {
         model.track.observe(viewLifecycleOwner ,{
             val line = Polyline()
             line.setPoints(it)
+            line.outlinePaint.color = Color.parseColor("#4CAF50")
+            line.outlinePaint.strokeWidth = 8f
+            line.outlinePaint.strokeCap = Paint.Cap.ROUND
+            line.outlinePaint.strokeJoin = Paint.Join.ROUND
             map.overlayManager[0] = line
 
             // Remove old start/end markers
@@ -295,6 +306,13 @@ class TrackFragment : Fragment() {
         mapDash1 = root.findViewById(R.id.map_dash_1)
         mapDash2 = root.findViewById(R.id.map_dash_2)
         mapDash3 = root.findViewById(R.id.map_dash_3)
+
+        // 标记路径点按钮
+        btnMarkWaypoint = root.findViewById(R.id.btn_mark_waypoint)
+        updateMarkButtonState()
+        btnMarkWaypoint?.setOnClickListener {
+            addWaypoint()
+        }
 
         return root
     }
@@ -464,6 +482,7 @@ class TrackFragment : Fragment() {
         map.onResume()
         refreshMapTypeIfNeeded()
         startGps()
+        updateMarkButtonState()
     }
 
     private fun refreshMapTypeIfNeeded() {
@@ -502,6 +521,94 @@ class TrackFragment : Fragment() {
                 map.overlays.add(oldOverlayIndex, DoubleTapDragZoomOverlay(map, zoomSensitivity.toFloat()))
             }
         }
+    }
+
+    /** 更新标记按钮状态：录制中启用，否则禁用 */
+    private fun updateMarkButtonState() {
+        val prefs = requireContext().getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
+        val isRecording = prefs.getBoolean("is_recording", false)
+        btnMarkWaypoint?.alpha = if (isRecording) 1.0f else 0.3f
+        btnMarkWaypoint?.isEnabled = isRecording
+    }
+
+    /** 在当前位置添加路径标记点 */
+    private fun addWaypoint() {
+        val prefs = requireContext().getSharedPreferences("biscuit_settings", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("is_recording", false)) return
+
+        // 获取当前位置：优先 trackpoint，其次 GPS
+        val tp = model.trackpoint.value
+        val lat: Double
+        val lng: Double
+        if (tp?.lat != null && tp.lng != null && (tp.lat != 0.0 || tp.lng != 0.0)) {
+            lat = tp.lat
+            lng = tp.lng
+        } else {
+            val loc = lastGpsLocation ?: return
+            lat = loc.latitude
+            lng = loc.longitude
+        }
+
+        val wp = Waypoint(
+            index = waypoints.size + 1,
+            lat = lat,
+            lng = lng,
+            timestamp = java.time.Instant.now()
+        )
+        waypoints.add(wp)
+
+        // 在地图上绘制标记点
+        addWaypointOverlay(wp)
+
+        // 保存到 SharedPreferences
+        prefs.edit().putString("ride_waypoints", Waypoint.toJson(waypoints)).apply()
+
+        Toast.makeText(requireContext(), "标记 #${wp.index}", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 在地图上添加带标号的蓝色圆点标记 */
+    private fun addWaypointOverlay(wp: Waypoint) {
+        val density = resources.displayMetrics.density
+        val size = (24 * density).toInt()
+        val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+
+        // 蓝色圆点 + 白色描边
+        val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#2196F3")
+            style = android.graphics.Paint.Style.FILL
+        }
+        val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 2 * density
+        }
+        val cx = size / 2f
+        val cy = size / 2f
+        val radius = size / 2f - 2 * density
+        canvas.drawCircle(cx, cy, radius, circlePaint)
+        canvas.drawCircle(cx, cy, radius, strokePaint)
+
+        // 标号文字
+        val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 11 * density
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+        val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2
+        canvas.drawText("${wp.index}", cx, textY, textPaint)
+
+        val drawable = android.graphics.drawable.BitmapDrawable(resources, bitmap)
+        val overlay = IconOverlay(GeoPoint(wp.lat, wp.lng), drawable)
+        val youAreHereIndex = map.overlays.indexOf(youAreHere)
+        if (youAreHereIndex >= 0) {
+            map.overlays.add(youAreHereIndex, overlay)
+        } else {
+            map.overlays.add(overlay)
+        }
+        waypointOverlays.add(overlay)
+        map.invalidate()
     }
 
     override fun onPause() {

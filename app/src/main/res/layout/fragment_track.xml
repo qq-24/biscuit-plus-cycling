@@ -14,6 +14,20 @@
         app:layout_constraintTop_toTopOf="parent" />
 
     <ImageButton
+        android:id="@+id/btn_mark_waypoint"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="8dp"
+        android:src="@android:drawable/ic_input_add"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="标记路径点"
+        android:padding="8dp"
+        android:alpha="0.3"
+        app:layout_constraintBottom_toTopOf="@id/btn_auto_follow"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <ImageButton
         android:id="@+id/btn_auto_follow"
         android:layout_width="48dp"
         android:layout_height="48dp"

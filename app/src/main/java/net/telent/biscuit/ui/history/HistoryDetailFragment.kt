@@ -35,7 +35,9 @@ import net.telent.biscuit.KmSplit
 import net.telent.biscuit.R
 import net.telent.biscuit.RideStatsCalculator
 import net.telent.biscuit.Session
+import net.telent.biscuit.SpeedColorMapper
 import net.telent.biscuit.TianDiTuTileSource
+import net.telent.biscuit.Waypoint
 import net.telent.biscuit.Trackpoint
 import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.util.BoundingBox
@@ -247,11 +249,31 @@ class HistoryDetailFragment : Fragment() {
         }
 
         val geoPoints = pointsForMap.map { GeoPoint(it.lat!!, it.lng!!) }
-        val polyline = Polyline()
-        polyline.setPoints(geoPoints)
-        polyline.outlinePaint.color = Color.parseColor("#4CAF50")
-        polyline.outlinePaint.strokeWidth = 8f
-        mapView.overlays.add(polyline)
+
+        // 按速度着色的多段轨迹
+        if (pointsForMap.size >= 2) {
+            val speeds = pointsForMap.map { it.speed }
+            val validSpeeds = speeds.filter { it > 0f }
+            val minSpeed = if (validSpeeds.isNotEmpty()) validSpeeds.min() else 0f
+            val maxSpeed = if (validSpeeds.isNotEmpty()) validSpeeds.max() else 1f
+
+            for (i in 0 until geoPoints.size - 1) {
+                val segment = Polyline()
+                segment.setPoints(listOf(geoPoints[i], geoPoints[i + 1]))
+                val avgSpeed = (pointsForMap[i].speed + pointsForMap[i + 1].speed) / 2f
+                segment.outlinePaint.color = SpeedColorMapper.getColor(avgSpeed, minSpeed, maxSpeed)
+                segment.outlinePaint.strokeWidth = 8f
+                segment.outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                segment.outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
+                mapView.overlays.add(segment)
+            }
+        } else {
+            val polyline = Polyline()
+            polyline.setPoints(geoPoints)
+            polyline.outlinePaint.color = Color.parseColor("#4CAF50")
+            polyline.outlinePaint.strokeWidth = 8f
+            mapView.overlays.add(polyline)
+        }
 
         // Add start/end markers
         if (geoPoints.size >= 2) {
@@ -281,6 +303,54 @@ class HistoryDetailFragment : Fragment() {
         val boundingBox = BoundingBox.fromGeoPoints(geoPoints)
         mapView.post {
             mapView.zoomToBoundingBox(boundingBox, true, 50)
+        }
+
+        // 显示路径标记点
+        displayWaypoints()
+    }
+
+    /** 从 SharedPreferences 读取并显示路径标记点 */
+    private fun displayWaypoints() {
+        val prefs = requireContext().getSharedPreferences("biscuit_settings", android.content.Context.MODE_PRIVATE)
+        val waypointsKey = "waypoints_$sessionStartMillis"
+        val json = prefs.getString(waypointsKey, null) ?: return
+        val waypoints = Waypoint.fromJson(json)
+        if (waypoints.isEmpty()) return
+
+        val density = resources.displayMetrics.density
+        for (wp in waypoints) {
+            val size = (24 * density).toInt()
+            val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bitmap)
+
+            // 蓝色圆点 + 白色描边
+            val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.parseColor("#2196F3")
+                style = android.graphics.Paint.Style.FILL
+            }
+            val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = android.graphics.Paint.Style.STROKE
+                strokeWidth = 2 * density
+            }
+            val cx = size / 2f
+            val cy = size / 2f
+            val radius = size / 2f - 2 * density
+            canvas.drawCircle(cx, cy, radius, circlePaint)
+            canvas.drawCircle(cx, cy, radius, strokePaint)
+
+            // 标号文字
+            val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = 11 * density
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                textAlign = android.graphics.Paint.Align.CENTER
+            }
+            val textY = cy - (textPaint.descent() + textPaint.ascent()) / 2
+            canvas.drawText("${wp.index}", cx, textY, textPaint)
+
+            val drawable = android.graphics.drawable.BitmapDrawable(resources, bitmap)
+            mapView.overlays.add(org.osmdroid.views.overlay.IconOverlay(GeoPoint(wp.lat, wp.lng), drawable))
         }
     }
 

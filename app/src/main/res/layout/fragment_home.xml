@@ -69,6 +69,26 @@
                 android:textColor="?android:attr/textColorPrimary"
                 tools:text="0:05:30" />
 
+            <ImageButton
+                android:id="@+id/btn_media_prev"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="12dp"
+                android:src="@android:drawable/ic_media_previous"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="上一曲"
+                android:visibility="gone" />
+
+            <ImageButton
+                android:id="@+id/btn_media_next"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
+                android:src="@android:drawable/ic_media_next"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="下一曲"
+                android:visibility="gone" />
+
         </LinearLayout>
 
     </LinearLayout>
